@@ -166,8 +166,8 @@ const moveToward=(a,b,s)=>a<b?Math.min(a+s,b):Math.max(a-s,b);
 function mulberry(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 const rnd=mulberry(20261012);
 
-/* ================= الحفظ والإعدادات ================= */
-const DEF={car:'vortex',color:'#39ff14',finish:'gloss',spoiler:'default',rim:'#c9d1cc',rimSize:2,ride:0,neon:'#39ff14',neonOn:true,tint:0.55,head:'#ffffff',engine:0,tires:0,nitroTank:0,sound:true,rain:false,tod:'night',bots:12,quality:'med',control:'buttons',sens:1,invertTilt:false};
+/* ================= الحفظ والإعدادات (تم ضبط البوتات على 0) ================= */
+const DEF={car:'vortex',color:'#39ff14',finish:'gloss',spoiler:'default',rim:'#c9d1cc',rimSize:2,ride:0,neon:'#39ff14',neonOn:true,tint:0.55,head:'#ffffff',engine:0,tires:0,nitroTank:0,sound:true,rain:false,tod:'night',bots:0,quality:'med',control:'buttons',sens:1,invertTilt:false};
 let save={...DEF};
 try{const raw=JSON.parse(localStorage.getItem('darknosCarLab3')||'{}');if(raw&&typeof raw==='object')save={...DEF,...raw};}catch(e){}
 const persist=()=>{try{localStorage.setItem('darknosCarLab3',JSON.stringify(save));}catch(e){}};
@@ -187,8 +187,8 @@ const RIMS=['#c9d1cc','#1a1a1a','#ffd54a','#39ff14','#ff1744','#00c8ff','#b57cff
 const NEONS=['#39ff14','#00c8ff','#ff00dd','#ff9800','#ffffff','#ff1744','#9b59ff'];
 const HEADS=['#ffffff','#bfe6ff','#ffe28a','#d6ffd0'];
 
-/* ================= ثوابت المدينة ================= */
-const S=56,W_ROAD=16,N=12,HALF=N*S/2,SLAB=S-W_ROAD,SLAB_H=0.14,LIM=HALF+W_ROAD/2;
+/* ================= ثوابت الخريطة الكبيرة جداً ================= */
+const S=56,W_ROAD=16,N=22,HALF=N*S/2,SLAB=S-W_ROAD,SLAB_H=0.14,LIM=HALF+W_ROAD/2;
 const nodeC=i=>(i-N/2)*S;
 const blockC=i=>(i+0.5-N/2)*S;
 const blockCol=new Map();
@@ -392,12 +392,21 @@ function rebuildPlayer(){
  player=nv;setVehicleTOD(nv);
 }
 
-/* ================= الفيزياء ================= */
+/* ================= الفيزياء (تم دعم الارتفاعات والتلال) ================= */
 function groundAt(x,z){
  if(Math.abs(x)>HALF||Math.abs(z)>HALF)return 0;
  const u=(x+HALF)/S,w=(z+HALF)/S;
  const fx=Math.abs(u-Math.floor(u)-0.5)*S,fz=Math.abs(w-Math.floor(w)-0.5)*S;
- return(fx<SLAB/2&&fz<SLAB/2)?SLAB_H:0;
+ let baseH = (fx<SLAB/2&&fz<SLAB/2)?SLAB_H:0;
+ // حساب الارتفاع للجبال القابلة للصعود
+ for(const m of mountains){
+  const dist = Math.hypot(x-m.x, z-m.z);
+  if(dist < m.r){
+   let h = Math.max(0, m.h * (1 - dist/m.r));
+   if(h > baseH) baseH = h;
+  }
+ }
+ return baseH;
 }
 function stepVehicle(v,inp,dt){
  const d=v.d,s=v.stats;
@@ -426,13 +435,11 @@ function stepVehicle(v,inp,dt){
  const idle=inp.throttle===0&&inp.brake===0;
  if(idle)a-=vF*0.05+Math.sign(vF)*0.5;
  a-=vF*aF0*0.0009;
- /* التماسك الجانبي */
  const maxLat=s.grip*1.15*rainK*(inp.hand?0.6:1);
  let gripK=s.grip*rainK;
  gripK*=1-d.drive*0.28*inp.throttle*Math.min(1,Math.abs(v.yaw)/0.9)*Math.min(1,aF0/12);
  const damp=inp.hand?gripK*0.1:gripK*(Math.abs(vL)>2.8?0.55:1);
  const aL=clamp(-vL*damp,-maxLat,maxLat);
- /* التوجيه */
  const wb=d.fz-d.rz;
  const latSteer=maxLat*1.35*(inp.hand?1.4:1);
  const maxAng=Math.min(inp.hand?0.7:0.6,Math.atan(latSteer*wb/Math.max(aF0*aF0,6)));
@@ -527,98 +534,6 @@ function collideCars(){
     }
    }
   }
- }
-}
-
-/* ================= الذكاء الاصطناعي ================= */
-const DIRS=[[1,0],[-1,0],[0,1],[0,-1]];
-function chooseNext(a){
- const opts=[];
- for(const [dx,dz] of DIRS){
-  if(dx===-a.dx&&dz===-a.dz)continue;
-  const ni=a.ti+dx,nj=a.tj+dz;
-  if(ni<0||ni>N||nj<0||nj>N)continue;
-  const w=(dx===a.dx&&dz===a.dz)?3:1;
-  for(let k=0;k<w;k++)opts.push([dx,dz]);
- }
- const p=opts[Math.floor(Math.random()*opts.length)]||[-a.dx,-a.dz];
- a.ndx=p[0];a.ndz=p[1];
-}
-function placeBot(b,near){
- const a=b.ai;
- let tries=0,placed=false;
- while(tries++<14&&!placed){
-  let ni,nj;
-  if(near&&player){
-   ni=clamp(Math.round(player.x/S+N/2)+Math.floor(Math.random()*11)-5,0,N);
-   nj=clamp(Math.round(player.z/S+N/2)+Math.floor(Math.random()*11)-5,0,N);
-  }else{ni=Math.floor(Math.random()*(N+1));nj=Math.floor(Math.random()*(N+1));}
-  const dirs=DIRS.filter(([dx,dz])=>{const ti=ni+dx,tj=nj+dz;return ti>=0&&ti<=N&&tj>=0&&tj<=N;});
-  const [dx,dz]=dirs[Math.floor(Math.random()*dirs.length)];
-  const t=12+Math.random()*(S-24);
-  const off=W_ROAD*0.25,rxd=-dz,rzd=dx;
-  const x=nodeC(ni)+dx*t+rxd*off,z=nodeC(nj)+dz*t+rzd*off;
-  if(player&&Math.hypot(x-player.x,z-player.z)<70&&tries<13)continue;
-  a.dx=dx;a.dz=dz;a.ti=ni+dx;a.tj=nj+dz;chooseNext(a);
-  b.x=x;b.z=z;b.h=Math.atan2(dx,dz);
-  const sp=a.cruise*0.7;b.vx=Math.sin(b.h)*sp;b.vz=Math.cos(b.h)*sp;
-  b.yaw=0;b.steerAng=0;a.stuckT=0;a.rev=0;a.relocT=0;
-  placed=true;
- }
-}
-function aiControl(b,dt){
- const a=b.ai,inp=b.input;
- if(a.rev>0){a.rev-=dt;inp.throttle=0;inp.brake=1;inp.steer=a.revSteer;inp.hand=false;inp.nitro=false;return;}
- let tx=nodeC(a.ti),tz=nodeC(a.tj);
- let dist=(tx-b.x)*a.dx+(tz-b.z)*a.dz;
- const turning=(a.ndx!==a.dx||a.ndz!==a.dz);
- if(dist<(turning?9:0.5)){
-  a.dx=a.ndx;a.dz=a.ndz;a.ti+=a.dx;a.tj+=a.dz;chooseNext(a);
-  tx=nodeC(a.ti);tz=nodeC(a.tj);dist=(tx-b.x)*a.dx+(tz-b.z)*a.dz;
- }
- const rxd=-a.dz,rzd=a.dx,off=W_ROAD*0.25;
- const lx=tx+rxd*off,lz=tz+rzd*off;
- const e=(b.x-lx)*rxd+(b.z-lz)*rzd;
- const spd=Math.max(0,b.vF);
- const Ld=clamp(7+spd*0.55,9,24);
- const px=b.x-rxd*e+a.dx*Ld,pz=b.z-rzd*e+a.dz*Ld;
- const dxw=px-b.x,dzw=pz-b.z,sh=Math.sin(b.h),ch=Math.cos(b.h);
- const lf=dxw*sh+dzw*ch,lr=-dxw*ch+dzw*sh;
- const steer=clamp(Math.atan2(-lr,lf)*1.7,-1,1);
- let tv=a.cruise;
- const nextTurn=(a.ndx!==a.dx||a.ndz!==a.dz);
- if(nextTurn&&dist<38)tv=Math.min(tv,8.5);
- if(Math.abs(steer)>0.55)tv=Math.min(tv,10);
- for(const o of vehicles){
-  if(o===b)continue;
-  const rx_=o.x-b.x,rz_=o.z-b.z,ahead=rx_*sh+rz_*ch;
-  if(ahead<0||ahead>32)continue;
-  const lat=-rx_*ch+rz_*sh;
-  if(Math.abs(lat)<3.4){
-   const gap=ahead-(o.d.L+b.d.L)/2,ov=Math.max(0,o.vF);
-   tv=Math.min(tv,Math.max(0,ov+(gap-5)*0.6));
-  }
- }
- const dv=tv-b.vF;
- inp.throttle=dv>0.5?clamp(dv/5,0,1):0;
- inp.brake=dv<-1?clamp(-dv/7,0,1):0;
- inp.hand=false;inp.nitro=false;inp.steer=steer;
- if(inp.throttle>0.3&&Math.abs(b.vF)<0.6)a.stuckT+=dt;else a.stuckT=Math.max(0,a.stuckT-dt);
- if(a.stuckT>4){a.rev=1.4;a.revSteer=Math.random()<0.5?-1:1;a.stuckT=0;a.relocT++;}
-}
-function spawnBots(n){
- for(let i=vehicles.length-1;i>=0;i--){
-  const v=vehicles[i];
-  if(!v.isPlayer){scene.remove(v.vis.root);disposeVis(v.vis);vehicles.splice(i,1);}
- }
- const keysC=Object.keys(CARS);
- for(let i=0;i<n;i++){
-  const key=keysC[Math.floor(Math.random()*keysC.length)];
-  const o={...DEF,car:key,color:PALETTE[Math.floor(Math.random()*PALETTE.length)],finish:Math.random()<0.25?'matte':'gloss',spoiler:'default',rim:RIMS[Math.floor(Math.random()*RIMS.length)],rimSize:2,ride:0,neonOn:Math.random()<0.2,neon:NEONS[Math.floor(Math.random()*NEONS.length)],tint:0.55,head:'#ffffff',engine:0,tires:0,nitroTank:0};
-  const b=makeVehicle(key,o,false);
-  b.ai={cruise:12+Math.random()*9,dx:1,dz:0,ti:0,tj:0,ndx:1,ndz:0,stuckT:0,rev:0,revSteer:1,relocT:0};
-  placeBot(b,i%3!==0);
-  vehicles.push(b);setVehicleTOD(b);
  }
 }
 
@@ -791,7 +706,8 @@ const Snd={ctx:null,master:null,eng:null,tire:null,noise:null,
  }
 };
 
-/* ================= بناء المدينة ================= */
+/* ================= بناء المدينة والجبال والدرفت ================= */
+let mountains=[];
 function makeCityTextures(){
  const r=mulberry(77);
  const lit=[];for(let i=0;i<64;i++)lit.push(r()<0.42);
@@ -855,38 +771,30 @@ function buildCity(){
    const cx=blockC(i),cz=blockC(j),dist=Math.hypot(cx,cz)/HALF;
    const park=dist>0.25&&rnd()<0.13;
    slabs.push({cx,cz,park});
-   if(park){for(let t=0;t<24;t++)addTree(cx+(rnd()-0.5)*34,cz+(rnd()-0.5)*34);continue;}
+   if(park){for(let t=0;t<14;t++)addTree(cx+(rnd()-0.5)*34,cz+(rnd()-0.5)*34);continue;}
+   
+   // تقليل عدد المباني (مبنى واحد إلى اثنين فقط per block لتبقى المدينة خفيفة وواسعة)
    const list=[];
-   for(const a of [-1,1])for(const b of [-1,1]){
-    if(rnd()<0.1){addTree(cx+a*10,cz+b*10);continue;}
-    const w=10+rnd()*4,d=10+rnd()*4;
-    const lx=cx+a*10+(rnd()-0.5)*1.2,lz=cz+b*10+(rnd()-0.5)*1.2;
-    const boost=Math.max(0,0.5-dist)/0.5;
-    const h=9+rnd()*16+boost*(30+rnd()*70);
+   if(rnd() < 0.45 && Math.abs(cx) > 100 && Math.abs(cz) > 100) {
+    const w=12+rnd()*6,d=12+rnd()*6;
+    const h=15+rnd()*35;
     const c=tint[Math.floor(rnd()*tint.length)];
-    addBox(lx,lz,w,d,h,SLAB_H,c);
-    if(h>38)addBox(lx,lz,w*0.68,d*0.68,8+rnd()*10,SLAB_H+h,tint[Math.floor(rnd()*tint.length)]);
-    list.push({x0:lx-w/2-0.2,x1:lx+w/2+0.2,z0:lz-d/2-0.2,z1:lz+d/2+0.2});
-    if(h>22&&rnd()<0.3){
-     const sx=rnd()<0.5?-1:1,sz=rnd()<0.5?-1:1;
-     neon.push({x:lx+sx*(w/2+0.12),y:SLAB_H+h*(0.35+rnd()*0.3),z:lz+sz*(d/2+0.12),sy:h*(0.25+rnd()*0.3),c:NEONS[Math.floor(rnd()*NEONS.length)]});
-    }
+    addBox(cx,cz,w,d,h,SLAB_H,c);
+    list.push({x0:cx-w/2-0.2,x1:cx+w/2+0.2,z0:cz-d/2-0.2,z1:cz+d/2+0.2});
    }
    blockCol.set(i*32+j,list);
-   for(const t of [-14,0,14]){
-    if(rnd()<0.7)addTree(cx+t,cz-19.2);if(rnd()<0.7)addTree(cx+t,cz+19.2);
-    if(rnd()<0.7)addTree(cx-19.2,cz+t);if(rnd()<0.7)addTree(cx+19.2,cz+t);
-   }
   }
  }
  cityMat=new THREE.MeshStandardMaterial({map:tex.col,emissiveMap:tex.em,emissive:'#ffffff',emissiveIntensity:1.8,vertexColors:true,roughness:0.8,metalness:0.1,envMapIntensity:0.3});
  const city=new THREE.Mesh(mergeGeometries(geos),cityMat);
  city.castShadow=true;city.receiveShadow=true;scene.add(city);
+
  /* قطع الأرصفة */
  const slabMat=new THREE.MeshStandardMaterial({color:'#ffffff',roughness:1,envMapIntensity:0.1});
  const slabMesh=new THREE.InstancedMesh(new THREE.BoxGeometry(SLAB,SLAB_H,SLAB),slabMat,slabs.length);
  slabs.forEach((s,i)=>{dummy.position.set(s.cx,SLAB_H/2,s.cz);dummy.rotation.set(0,0,0);dummy.scale.set(1,1,1);dummy.updateMatrix();slabMesh.setMatrixAt(i,dummy.matrix);slabMesh.setColorAt(i,new THREE.Color(s.park?'#2d6a35':'#7a7f77'));});
  slabMesh.receiveShadow=true;scene.add(slabMesh);
+
  /* الشوارع */
  const segGeo=new THREE.PlaneGeometry(W_ROAD,S-W_ROAD);segGeo.rotateX(-Math.PI/2);
  const roadMat=new THREE.MeshStandardMaterial({map:tex.road,roughness:0.92,metalness:0,envMapIntensity:0.12});
@@ -903,15 +811,51 @@ function buildCity(){
  n=0;dummy.rotation.set(0,0,0);
  for(let k=0;k<=N;k++)for(let l=0;l<=N;l++){dummy.position.set(nodeC(k),0.025,nodeC(l));dummy.updateMatrix();ints.setMatrixAt(n++,dummy.matrix);}
  ints.receiveShadow=true;scene.add(ints);
+
  /* الأرض */
- const ground=new THREE.Mesh(new THREE.PlaneGeometry(6000,6000),new THREE.MeshStandardMaterial({color:'#223224',roughness:1,envMapIntensity:0}));
+ const ground=new THREE.Mesh(new THREE.PlaneGeometry(7000,7000),new THREE.MeshStandardMaterial({color:'#223224',roughness:1,envMapIntensity:0}));
  ground.rotation.x=-Math.PI/2;ground.position.y=-0.03;ground.receiveShadow=true;scene.add(ground);
- /* سور الحدود */
+
+ /* ================= إضافة مكان الدرفت (Drift Arena) ================= */
+ const driftGeo = new THREE.CylinderGeometry(55, 55, 0.2, 32);
+ const driftMat = new THREE.MeshStandardMaterial({color: '#111518', roughness: 0.3, metalness: 0.2});
+ const driftArena = new THREE.Mesh(driftGeo, driftMat);
+ driftArena.position.set(120, 0.05, 120);
+ driftArena.receiveShadow = true;
+ scene.add(driftArena);
+ // إطار نيون لساحة الدرفت
+ const ringGeo = new THREE.TorusGeometry(54, 0.8, 16, 50);
+ ringGeo.rotateX(Math.PI/2);
+ const ringMat = new THREE.MeshBasicMaterial({color: '#39ff14'});
+ const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+ ringMesh.position.set(120, 0.1, 120);
+ scene.add(ringMesh);
+
+ /* ================= إضافة الجبال القابلة للصعود ================= */
+ const mountainMat = new THREE.MeshStandardMaterial({color: '#46524a', roughness: 0.9, flatShading: true});
+ const mCoords = [
+  {x: -HALF + 100, z: -HALF + 100, r: 140, h: 65},
+  {x: HALF - 120, z: -HALF + 120, r: 160, h: 80},
+  {x: -HALF + 150, z: HALF - 150, r: 150, h: 70},
+  {x: HALF - 140, z: HALF - 140, r: 170, h: 90}
+ ];
+ mCoords.forEach(mc => {
+  const mGeo = new THREE.ConeGeometry(mc.r, mc.h, 12);
+  const mMesh = new THREE.Mesh(mGeo, mountainMat);
+  mMesh.position.set(mc.x, mc.h/2, mc.z);
+  mMesh.castShadow = true;
+  mMesh.receiveShadow = true;
+  scene.add(mMesh);
+  mountains.push({x: mc.x, z: mc.z, r: mc.r, h: mc.h});
+ });
+
+ /* سور الحدود الخارجي */
  const wallMat=new THREE.MeshStandardMaterial({color:'#7d8a80',roughness:0.9,envMapIntensity:0.1});
  const ext=LIM+1.2,len=(LIM+3.4)*2;
  for(const [x,z,sx,sz] of [[ext,0,2,len],[-ext,0,2,len],[0,ext,len,2],[0,-ext,len,2]]){
   const w=new THREE.Mesh(new THREE.BoxGeometry(sx,1.6,sz),wallMat);w.position.set(x,0.8,z);w.castShadow=true;w.receiveShadow=true;scene.add(w);
  }
+
  /* الأشجار */
  const trunkM=new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18,0.26,1.6,5),new THREE.MeshStandardMaterial({color:'#4a3322',roughness:1,envMapIntensity:0.1}),trees.length);
  const leafM=new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1.15,0),new THREE.MeshStandardMaterial({color:'#ffffff',roughness:0.95,flatShading:true,envMapIntensity:0.1}),trees.length);
@@ -922,15 +866,10 @@ function buildCity(){
   leafM.setColorAt(i,new THREE.Color().setHSL(0.3+t.c*0.07,0.5,0.17+t.c*0.07));
  });
  leafM.castShadow=true;scene.add(trunkM);scene.add(leafM);
- /* إشارات النيون */
- if(neon.length){
-  const nm=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshBasicMaterial({color:'#ffffff'}),neon.length);
-  neon.forEach((o,i)=>{dummy.rotation.set(0,0,0);dummy.position.set(o.x,o.y,o.z);dummy.scale.set(0.35,o.sy,0.35);dummy.updateMatrix();nm.setMatrixAt(i,dummy.matrix);nm.setColorAt(i,new THREE.Color(o.c));});
-  scene.add(nm);
- }
+
  /* أعمدة الإنارة */
  const lampPos=[];
- for(let k=0;k<=N;k++)for(let l=0;l<=N;l++)for(const sx of [-1,1])for(const sz of [-1,1])lampPos.push([nodeC(k)+sx*9.2,nodeC(l)+sz*9.2,sx,sz]);
+ for(let k=0;k<=N;k+=2)for(let l=0;l<=N;l+=2)for(const sx of [-1,1])for(const sz of [-1,1])lampPos.push([nodeC(k)+sx*9.2,nodeC(l)+sz*9.2,sx,sz]);
  const poleM=new THREE.InstancedMesh(new THREE.CylinderGeometry(0.1,0.14,6,6),new THREE.MeshStandardMaterial({color:'#3a433d',roughness:0.8,envMapIntensity:0.1}),lampPos.length);
  const headM=new THREE.InstancedMesh(new THREE.BoxGeometry(1.6,0.14,0.45),new THREE.MeshBasicMaterial({color:'#fff3c4'}),lampPos.length);
  poolMat=new THREE.MeshBasicMaterial({map:SM.glowTex,color:'#ffe2a0',transparent:true,opacity:0,blending:THREE.AdditiveBlending,depthWrite:false});
@@ -1168,7 +1107,6 @@ function renderSettings(){
  h+=seg('sound','الصوت',[{v:true,t:'🔊 شغّال'},{v:false,t:'🔇 مكتوم'}]);
  h+=seg('tod','الوقت',[{v:'day',t:'☀️ نهار'},{v:'sunset',t:'🌇 غروب'},{v:'night',t:'🌙 ليل'}]);
  h+=seg('rain','الطقس',[{v:false,t:'صافي'},{v:true,t:'🌧️ مطر'}]);
- h+=seg('bots','سيارات المرور',[{v:0,t:'بدون'},{v:6,t:'6'},{v:12,t:'12'},{v:20,t:'20'}]);
  h+=seg('quality','الجودة',[{v:'low',t:'منخفضة'},{v:'med',t:'متوسطة'},{v:'high',t:'عالية'}]);
  h+=seg('control','التحكم باللمس',[{v:'buttons',t:'أزرار'},{v:'tilt',t:'ميلان الجهاز'}]);
  if(save.control==='tilt')h+=seg('invertTilt','اتجاه الميلان',[{v:false,t:'عادي'},{v:true,t:'معكوس'}]);
@@ -1185,7 +1123,6 @@ $('settingsBody').addEventListener('click',async e=>{
  const k=b.dataset.k;save[k]=v;persist();
  if(k==='sound')Snd.setOn(v);
  if(k==='tod'||k==='rain')applyTOD();
- if(k==='bots')spawnBots(v);
  if(k==='quality')applyQuality();
  if(k==='control'&&v==='tilt'){const ok=await enableTilt();if(!ok){save.control='buttons';persist();}}
  renderSettings();
@@ -1204,7 +1141,7 @@ function gearInfo(v){
 }
 const mm=$('minimap'),mctx=mm.getContext('2d');
 function drawMinimap(){
- const w=mm.width,c=w/2,sc=0.46,v=player,sh=Math.sin(v.h),ch=Math.cos(v.h);
+ const w=mm.width,c=w/2,sc=0.25,v=player,sh=Math.sin(v.h),ch=Math.cos(v.h);
  const tx=(x,z)=>{const dx=x-v.x,dz=z-v.z;return[c+(-dx*ch+dz*sh)*sc,c-(dx*sh+dz*ch)*sc];};
  mctx.clearRect(0,0,w,w);
  mctx.save();mctx.beginPath();mctx.arc(c,c,c-2,0,TAU);mctx.clip();
@@ -1217,10 +1154,6 @@ function drawMinimap(){
   a=tx(-HALF,p);b=tx(HALF,p);mctx.moveTo(a[0],a[1]);mctx.lineTo(b[0],b[1]);
  }
  mctx.stroke();
- for(const o of vehicles){
-  if(o.isPlayer)continue;
-  const p=tx(o.x,o.z);mctx.fillStyle='#ff4a5a';mctx.beginPath();mctx.arc(p[0],p[1],4,0,TAU);mctx.fill();
- }
  mctx.restore();
  mctx.fillStyle='#39ff14';mctx.beginPath();mctx.moveTo(c,c-11);mctx.lineTo(c+7,c+8);mctx.lineTo(c-7,c+8);mctx.closePath();mctx.fill();
  mctx.strokeStyle='#39ff1488';mctx.lineWidth=3;mctx.beginPath();mctx.arc(c,c,c-2,0,TAU);mctx.stroke();
@@ -1247,26 +1180,17 @@ function animate(t){
  const active=!paused&&!garageOpen&&!settingsOpen;
  if(active){
   readInput(dt);
-  for(const b of vehicles)if(!b.isPlayer)aiControl(b,dt);
   const sub=2,h=dt/sub;
   for(let k=0;k<sub;k++){
    for(const v of vehicles){stepVehicle(v,v.input,h);collideWorld(v);}
    collideCars();
   }
-  if(Math.floor(t/1000)!==Math.floor((t-dt*1000)/1000)){
-   for(const b of vehicles){
-    if(b.isPlayer)continue;
-    if(Math.hypot(b.x-player.x,b.z-player.z)>290||b.ai.relocT>2)placeBot(b,true);
-   }
-  }
  }
  for(const v of vehicles){
-  if(!v.isPlayer){const far=Math.hypot(v.x-player.x,v.z-player.z)>330;v.vis.root.visible=!far;if(far)continue;}
   updateVisual(v,active?dt:0.0001);
  }
  updateEffects(dt);
  updateCamera(dt);
- /* مركز الظل والسماء */
  const dir=todCur?todCur.dir:[0.5,0.6,-0.4];
  const dl=Math.hypot(dir[0],dir[1],dir[2]);
  sun.position.set(player.x+dir[0]/dl*120,dir[1]/dl*120,player.z+dir[2]/dl*120);
@@ -1291,6 +1215,13 @@ window.addEventListener('resize',onResize);
 
 /* ================= التشغيل ================= */
 function init(){
+ // محاولة قفل وضع العرض تلقائياً
+ try {
+  if (screen.orientation && screen.orientation.lock) {
+   screen.orientation.lock('landscape').catch(() => {});
+  }
+ } catch(e) {}
+
  scene=new THREE.Scene();
  scene.fog=new THREE.Fog('#0b1220',70,430);
  camera=new THREE.PerspectiveCamera(62,window.innerWidth/window.innerHeight,0.1,1500);
@@ -1310,7 +1241,7 @@ function init(){
  sun=new THREE.DirectionalLight('#8fb0ff',0.7);
  sun.shadow.camera.left=-70;sun.shadow.camera.right=70;sun.shadow.camera.top=70;sun.shadow.camera.bottom=-70;sun.shadow.camera.near=10;sun.shadow.camera.far=320;sun.shadow.bias=-0.0004;sun.shadow.normalBias=0.04;
  scene.add(sun);scene.add(sun.target);
- /* السماء */
+ 
  sky=new THREE.Mesh(new THREE.SphereGeometry(900,24,16),new THREE.ShaderMaterial({side:THREE.BackSide,depthWrite:false,fog:false,
   uniforms:{top:{value:new THREE.Color('#000')},bottom:{value:new THREE.Color('#222')}},
   vertexShader:'varying vec3 vP;void main(){vP=normalize(position);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
@@ -1323,11 +1254,11 @@ function init(){
  stars.frustumCulled=false;stars.renderOrder=-9;scene.add(stars);
  skyDisc=new THREE.Mesh(new THREE.SphereGeometry(28,16,12),new THREE.MeshBasicMaterial({color:'#dfe8ff',fog:false}));
  skyDisc.frustumCulled=false;skyDisc.renderOrder=-8;scene.add(skyDisc);
+ 
  initRain();
  buildCity();
  initEffects();
  rebuildPlayer();
- spawnBots(save.bots);
  applyQuality();
  applyTOD();
  bindDrag();
@@ -1336,7 +1267,7 @@ function init(){
  $('loading').style.display='none';
  $('hud').style.display='block';
  window.__ready=true;
- toast('أهلاً بك في DARKNOS CITY 💚');
+ toast('أهلاً بك في خريطة الدرفت والجبال الواسعة 💚');
  requestAnimationFrame(animate);
 }
 try{init();}
